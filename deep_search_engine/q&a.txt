@@ -1,0 +1,96 @@
+========================================================================
+PROJECT ARCHITECTURE & LOGIC Q&A
+========================================================================
+
+Q1. What is spaCy and YAKE? (Working & Why used here)
+* spaCy kya hai? spaCy ek Advanced Natural Language Processing (NLP) library hai.
+* Working: Hum ise use karte hain kachra words/stopwords (the, how, in, a) ko delete karne, aur "Tokenization" (sentence ko todne) ke liye.
+* YAKE kya hai? Yet Another Keyword Extractor. Yeh bina kisi AI training data ke ek text se sabse important "Keywords" nikalta hai based on math.
+* Yahan kyu use kar rahe hain? Agar user search karta hai: "How to securely deploy NodeJS app on AWS india?". Agar main ye poori line search karunga toh bekar result milenge. Example: spaCy aur YAKE is query ko process karke extract karenge: ["deploy NodeJS", "AWS", "securely"]. Inko "Seed Nodes" bolte hain, aur code ab seedhe inhi strict keywords ko search karega.
+
+Q2. Why BFS instead of DFS? (Why we chose it & Benefits)
+* DFS (Depth-First Search) kyu nahi: DFS ek hi link pakad ke deep chala jata hai. Maanlo agar user ne "Electric Car" dhoondha. Pehla article ka link tha "Battery", uspe gaya link mila "Chemistry", uspe gaya "Atoms". Engine topic se completely bhatak (drift) gaya.
+* BFS (Breadth-First Search) ke benefits: BFS pehle top-level saare main topics pdhta hai. "Electric Car -> Tesla, Rivian, Basics". Jab yeh boundary layer effectively cover ho jati hai uske baad hi depth mein jata hai. Isse humara context user query ke bilkul ird-gird hi centralized rehta hai bina limit cross kiye. BFS inherently gives a "broader perspective" while DFS gives tunnel-vision.
+
+Q3. max_depth BFS mein kaise kaam karta hai? (Example & Diagram)
+* Working: Internet page anant (infinite) hain. Agar hum code direct range chod dein to system loop mai infinity tak ghusega, isliye base depth se limit lagete he.
+* Example Flow:
+    - Depth 0: Seed Query Search Page
+    - Depth 1 (Valid): Page Article 1, Page Article 2
+    - Depth 2 (Valid - LIMIT): Inside Hyperlink 1.1, Inside Hyperlink 1.2
+    - Depth 3 (CANCELED): Deep Link 1.1.1, max_depth blocked
+* Jab hum Node par pahuche and waha new hyperlinks khule, recursion loop check karta hai 'depth <= 2', condition false hoti hai to execution wahi terminate kar jati hai taaki strict resources limit bachi rahe!
+
+Q4. Node Pruning kaise kaam karta hai? (Kaise pata faltu link hai?)
+* Pruning Decision: Jab bhi DFS/BFS search me do pages link hote hai, to graph node code ek custom Math weight mark karta hai un links me. Formula lagate hain (W = Keyword + Hyperlink + Cosine).
+* Example: Page A ka topic hai "Best Laptop". Ek page A par achanak "Buy Cheap Drugs" link pada hai aur crawler click karta hai (Page B). Pruning formula trigger hota hai: Keyword Match = 0, Vectors match distance = 0 (bohut alag meaning). Final edge score aayega < 0.5. Since Threshold se low hai, uss link edge ko delete/drop kar dete hain noise ke basis par.
+
+Q5. 'scrapling' hi kyu use kara? Aur kuch kyu nahi (BeautifulSoup)?
+* Reason: Agar aap simple "requests" ya "bs4" libraries se Wikipedia or Medium download/scrape marte ho to Web-Server seconds mai detect kar leta hai ye Bot hai. Request Server error 403 Forbidden return karke system block mar dega!
+* Scrapling working: Ye library fully "stealth-mode" par based hai. Ye apne internal headers and Google/Chrome digital footprints hide karti hai aur randomly User-Agents ghuma ke bypass karti hai!
+
+Q6. MinHash logic samjhao, aue yahan kaise kaam kr raha hai?
+* Logic (Deduplication problem): Agar internet pe Wikipedia ka same same code proxy sites par bar bar repeat hai, loop mar jayega! Exact python loop check to compare million words crashes CPU.
+* Working: MinHash Locality-Sensitive Hashing lagata hain. Code pure long-article ko ek Number Signature (hash) encode karta hai. Uske baad Jaccard Similarity (A aur B mein kitne signature terms exactly mil rahe hain - Intersection Over Union). Agar Score > 0.9 aaya, Node immediately Dropped (deleted) before storing in Vector FAISS memory.
+
+Q7. NetworkX kya hai, yahan kaise use ho raha hai, faide?
+* Kya hai: Ye basically Python library hai exclusively banai "Matrices and Graphing Networks" node math solve karne ke liye.
+* Used here: Simple list [] lagakar math nahi hoti. Hum Scraped Data Document ko nx.add_node() me add karte hain, aur agar Link Pruning pass ki to hum unko nx.add_edge() se jodte hain.
+* Faide: Hum manually Graph Math ke pages ka equation array code nahi karte. Networkx directly functions expose karta hai for structural traversal and PageRank calculation probability instantly!
+
+Q8. Topic-Sensitive PageRank kya hai? Normal se kyu behtar hai?
+* Normal PageRank: Google ne start lagaya tha internet pe, ek random banda random kitne links click kare tab jake wo ek top website e.g. wikipedia ghum ghum ke arrive aata rehta hai (A Global Authority measure). Issue w/ normal: Ye user keyword query sense nahi samajhta.
+* Topic-Sensitive (PPR): Probability random Teleport Matrix me jump uniform hone ke bajaye hum Teleport Vector jump ko "Force" and Bias kar dete hain "SIRF QUERY WALE NODES" par. Equation run hokar graph rank un documents point output karega jo "Only your explicit queries ke mathematical central point hain".
+
+Q9. FAISS kya hai? Yahi kyu use kiya? Working batao.
+* Kya hai: FAISS (Facebook AI Similarity Search) ek vector database and library hai jise Facebook/Meta ne banaya hai.
+* Yahan kyu use kiya: Jab hamare paas massive scale documents (Nodes) hain, toh similarity math loop search (O(N^2)) phass jayega graph me. FAISS instantly ek dum millisecond (flash speed) mein 10 Lakh vectors mein se similarity dhoond sakta hai.
+* Working: Nearest neighbors algorithm (HNSW or IVFFlat) math space grouping use lagati hai exact point-by-point calculation lagane ke bajaye taaki sub-space dimension me jaldi najdeek vector mile!
+
+Q10. all-MiniLM-L6-v2 kya hai? Yahi kyu? Working batao.
+* Kya hai: Yeh HuggingFace Sentence-Transformers ka ek Model hai. Ek LLM jo text ko padhkar 384-dimensional number array (vector meaning embedding) banata hai.
+* Yahi kyu use kiya: Kyunki ye "Mini" hai. Isko run karne ke liye system massive cloud GPU nahi mangta ye CPU par fast chalta hai aur accuracy/understanding tagdi hai (latency low rehti hai).
+
+Q11. Cosine Similarity kahan calculate ho raha hai?
+* Calculation: Ye FAISS module interface ke madad se vector space compute hota hai. Main calculations jab un 2 nodes ke under connections ka "Edge Weighting / node pruning threshold" document level calculation generate maar raha hota hai (checking relation A to Document B context space).
+
+Q12. Graph hamesha top 3 results hi kyu dikhayega?
+* Reason: Hardware constraint. LLMs (Jaise apka backend llama text engine) ke paas ek strict maximum Context Window Limit set hota hai token ka (i.e limit to word buffer read input). Agar network 15 un-pruned heavy webpages LLMs array mai attach kia to memory phat ke error de degi! Isliye Filter pipeline Rank order output sirf absolutely Top 1, 2, 3 path forward karti hai LLM extraction task ke liye prompt window me.
+
+Q13. Project ka meaning kya? Kisliye or Kyu banaya? Iska use kya?
+* Meaning/Kyu banaya: To smash the "Context Wall!" Standard retrieval IR pipeline flat google list manti hai logic association check ignore marti hai. Apka yeh code ek Relational Recursive Research agent hai jo Multi-Hop query samajh sake un-isolated context bridge karne ke liye.
+* Uses (Use-Cases): High Level Investigative Research software for journalists/legal auditing. Finding correlation maps inside internal Deep Code documentation debugging and medical drug relation research jahan A ne C ko interact kiya.
+
+Q14. Competition with other Search Engines?
+* Normal Flat (BM25 Elastic / Google index basic lookup): Flat retrieval ek word index lookup array hai bina contextual hyper awareness ke jo multi path failure me fail hojata hai. Apka software context logic structure map building engine pe hai!
+* Modern tool jaise Perplexity AI comparison: Apne explicitly PageRank mathematics network graph engine and custom link matrix weights design show karke purely transparent, observable search engine develop kiya hai (unlike generic black-box AI outputs).
+
+
+========================================================================
+PART 3: THE MATHEMATICAL APPENDIX (Math logic Deep Dive)
+========================================================================
+
+Math 1. Jaccard Similarity (MinHash me Use hoti hai)
+* Equation: J(A, B) = |A ∩ B| / |A U B|
+* Simple Meaning (Hinglish): Document A aur Document B mein total kitne words EXACTLY common hain divided by dono milakar total unique words kitne hain. (Intersection Over Union).
+* Result: Agar J = 1.0 matlab document 100% same hai, proxy server ne upload kiya hai copy karke. If J > 0.9 -> DELETE DUPLICATE. Is function ne CPU memory bacha li.
+
+Math 2. Cosine Similarity (FAISS aur Node Edge me lagti hai)
+* Equation: Cos(θ) = (A · B) / (||A|| × ||B||)
+* Geometry Concept (Hinglish): Jab hum MiniLM se text vector banate hain to text 3D space mein ek line/arrow ban jata hai.
+* Math Logic:
+  1. Agar A aur B vector ek hi direction mein point kar rahe hain (Angle 0 degree), toh unka math Cosine Cos(0) = 1 hota hai. Iska matlab dono sentences (bhalai alag words hon) EXACT SAME MEANING rakhte hain!
+  2. Agar orthogonal hain (angle 90 degree), to Cos(90) = 0, matlab dono completely irrelevant hain. Node pruning me cosine pass/fail karta hai edge link.
+
+Math 3. Edge Weight Equation Formula (Node Pruning Math)
+* Equation: Wij = 0.4(Lex) + 0.3(Hyper) + 0.3(CosSim)
+* Linear Combination Math: Hume mathematical certainty banani thi ki koi bhi 2 document randomly ek dusre se graph link create na kare noise banakar. Ye ek Custom Weighting Linear score hai. Lexical exact word search ko dominant (0.4) array dia gaya taky search window restrict rahe (Bhatke na!), baki 60% relative relationship or semantics par chora. Condition laga di agar weight < 0.5 mathematically, code NetworkX Matrix se us coordinate pair ko nikal pheke!
+
+Math 4. Topic-Sensitive PageRank (Eigenvector Centrality)
+* The God Equation: P(t+1) = α · A · P(t) + (1 - α) · Q
+* Deep Mathematical Breakdown:
+  - P(t+1) -> Next Generation State Matrix (Surfer agle kadam par kahan milega)
+  - A -> Adjacency Matrix (Graph network layout kiske sath link karta hai)
+  - α (Alpha) -> Damping Factor. Usually isko 0.85 mathematically constant mante hain. Iska matlab randomly click chalte chalte surfer thak kar rukne ki probability 15% hai.
+  - Q -> Personalization Vector (YAHA GAME CHANGE HUA). Default PageRank me Q ko 1/N rakhte the isliye sab website barabar global the... Lekin humare code me Q Array matrix hai jisme HUM SIRF HAMARI QUERY WALE NODES PE (1) rakhte hain or baki dunia par (0).
+* Pure logic: (1 - α) · Q probability equation ka hissa crawler matrix ko BAR BAR force karke usi Node par jump teleport marwa dega jisme Query ka ans matrix math ke sabse pass/related ho. Result me Central Rank 1 query best Node aata hai.

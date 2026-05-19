@@ -13,6 +13,17 @@ from utils.text_utils import clean_text
 
 logger = logging.getLogger(__name__)
 
+# Interrogative / filler words that YAKE and spaCy often miss
+_EXTRA_STOPWORDS = {
+    "what", "which", "who", "whom", "whose", "where", "when", "why", "how",
+    "is", "are", "was", "were", "be", "been", "being",
+    "do", "does", "did", "doing",
+    "have", "has", "had", "having",
+    "can", "could", "will", "would", "shall", "should", "may", "might",
+    "tell", "explain", "describe", "define", "list", "give", "show",
+    "please", "also", "etc", "vs", "versus",
+}
+
 
 def extract_noun_phrases(query: str) -> List[str]:
     """Extract noun chunks from the query using spaCy."""
@@ -46,6 +57,22 @@ def extract_keywords_yake(query: str, top_n: int = 5) -> List[str]:
     return [kw[0].lower() for kw in keywords]
 
 
+def _filter_stopwords(keywords: List[str]) -> List[str]:
+    """Remove interrogative/filler words that NLP pipelines often miss."""
+    filtered = []
+    for kw in keywords:
+        # Drop if the entire keyword is a single stopword
+        kw_lower = kw.strip().lower()
+        if kw_lower in _EXTRA_STOPWORDS:
+            continue
+        # For multi-word phrases, strip leading/trailing stopwords
+        words = kw_lower.split()
+        words = [w for w in words if w not in _EXTRA_STOPWORDS]
+        if words:
+            filtered.append(" ".join(words))
+    return filtered
+
+
 def extract_all(query: str) -> List[str]:
     """
     Unified extraction: combine noun phrases + NER + YAKE keywords.
@@ -56,8 +83,12 @@ def extract_all(query: str) -> List[str]:
     yake_kws = extract_keywords_yake(query, top_n=5)
 
     combined = list(set(nouns + entities + yake_kws))
+    # Apply custom stopword filter
+    combined = _filter_stopwords(combined)
     # Filter out single-character noise
     combined = [kw for kw in combined if len(kw) > 1]
+    # Deduplicate again after filtering
+    combined = list(dict.fromkeys(combined))
     # Sort by length descending — longer phrases are usually more descriptive
     combined.sort(key=len, reverse=True)
 

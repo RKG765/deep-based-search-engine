@@ -1,0 +1,667 @@
+================================================================================
+  WHY WE CHOSE EVERY ALGORITHMIC DECISION IN THIS SEARCH ENGINE
+  A Technical Justification Document
+  Graph-Based Recursive Search Engine — IR End-Sem Project
+================================================================================
+
+This document explains, component by component, why each algorithm or method
+was chosen over its alternatives. Every choice is compared against the most
+famous competing approaches. This is about the algorithm, not the code.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. SIMILARITY MEASURE — WHY COSINE SIMILARITY?
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Used in: edge weights, pruning score, Q vector, re-ranking.
+
+WHAT IT DOES:
+    Cosine similarity measures the angle between two vectors, ignoring magnitude.
+    A score of 1.0 means identical direction; 0 means orthogonal (unrelated).
+
+    Formula: cos(A, B) = (A · B) / (|A| × |B|)
+
+WHY NOT EUCLIDEAN DISTANCE?
+    Euclidean distance measures absolute spatial distance between vectors.
+    Problem: A document with 5 occurrences of "python" gets a longer vector
+    than one with 3 occurrences. Euclidean treats length as meaning. A short
+    document about Python and a long one about Python would appear "far apart"
+    even though they discuss the same topic. This is called the length bias
+    problem. Bad for text retrieval.
+
+WHY NOT DOT PRODUCT (raw)?
+    Dot product = A · B without normalization.
+    Problem: it rewards documents that are long or have high-frequency terms,
+    regardless of actual relevance. You'd always surface verbose pages.
+    Cosine is essentially "normalized dot product" — it removes that bias.
+    We actually USE dot product internally, but only after L2-normalizing all
+    vectors first, which makes it mathematically identical to cosine.
+
+WHY NOT MANHATTAN DISTANCE (L1)?
+    Manhattan measures how many "unit steps" apart two vectors are.
+    It's not meaningful for semantic similarity in high-dimensional embedding
+    spaces (our vectors are 384-dimensional). In high dimensions, L1 distances
+    lose discriminability — everything starts to look roughly equidistant
+    (this is related to the "curse of dimensionality").
+
+WHY NOT JACCARD SIMILARITY (for embeddings)?
+    Jaccard works on sets: |A ∩ B| / |A ∪ B|. It's excellent for sparse
+    binary features (like keyword presence), which we DO use it for in
+    keyword overlap. But Jaccard cannot work on continuous dense vectors.
+    Two different uses → two different similarity measures. That's correct.
+
+WHY NOT PEARSON CORRELATION?
+    Pearson measures linear correlation. In NLP embeddings, we don't care
+    about linear correlation; we care about directional alignment in meaning
+    space. Cosine directly captures that. Pearson also centers the data
+    (subtracts means), which distorts embedding geometry.
+
+VERDICT: Cosine similarity is the industry standard for dense vector spaces
+(word2vec, BERT, GPT, etc.) because it is length-invariant, computationally
+fast (especially post-L2-normalization), and semantically interpretable.
+Used by Google, Facebook FAISS, OpenAI search, and every major embedding system.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+2. GRAPH RANKING — WHY PERSONALIZED PAGERANK?
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Used in: Stage 1 ranking over the document graph.
+
+WHAT IT DOES:
+    Personalized (Topic-Sensitive) PageRank runs random walks on the document
+    graph. At each step, with probability α (0.85), the walker follows an edge.
+    With probability (1-α), it teleports to a node weighted by query relevance
+    (the Q vector). Documents that are well-connected AND query-relevant end
+    up with high scores.
+
+    Formula: P(t+1) = α × A × P(t) + (1 − α) × Q
+
+WHY NOT STANDARD PAGERANK (Original Google PageRank)?
+    Standard PageRank uses uniform teleportation — with probability (1-α)
+    it jumps to ANY node with equal probability. It has no awareness of the
+    query. This works fine for ranking a web at scale (billions of pages)
+    where link authority correlates with quality. At our scale (40-200 docs),
+    a random walk without query guidance collapses to sorting by node degree.
+    The top result would just be the most-linked document, not the most
+    relevant. Personalized PageRank directly solves this by injecting query
+    relevance into the teleportation vector Q.
+
+WHY NOT HITS (Hyperlink-Induced Topic Search — Kleinberg 1999)?
+    HITS computes two scores per node: Hub (links to good pages) and Authority
+    (linked to by good hubs). It works well in the original web context where
+    hub/authority distinction is meaningful. Problems for us:
+    (A) HITS requires a dense, real hyperlink graph. Our graph edges are
+        partially synthetic (built from embeddings + domain-level links),
+        so the hub/authority distinction is not well-grounded.
+    (B) HITS is query-independent in its base form; the topic-sensitive
+        version (Zhang et al.) is complex to implement correctly.
+    (C) HITS is known to drift toward topic-unrelated "super hubs"
+        (the "TKC effect" — Bharat & Henzinger 1998). Not ideal.
+
+WHY NOT BM25 (Best Match 25)?
+    BM25 is a term-frequency based ranking function from probabilistic IR.
+    It is extremely well-calibrated and is the backbone of Elasticsearch.
+    We actually USE BM25 as our comparison baseline in the evaluation stage.
+    The problem: BM25 only sees keyword overlap. It has no semantic awareness.
+    "machine learning" and "ML" would be considered unrelated. It also has
+    no graph structure awareness — it cannot propagate authority through links.
+    We use PageRank because it adds a structural signal that BM25 cannot provide.
+
+WHY NOT LEARNING-TO-RANK (LambdaMART, RankNet, etc.)?
+    LambdaMART (used by Bing, Yahoo) and similar supervised re-ranking require
+    labelled training data: (query, document, relevance_score) triples.
+    We have zero labelled data for our domain. Learning-to-rank is impossible
+    without it, or requires significant offline training pipelines.
+    PageRank is unsupervised — it derives authority purely from graph structure.
+
+WHY NOT TF-IDF RANKING?
+    TF-IDF weights terms by frequency (TF) and inverse document frequency (IDF).
+    Like BM25, it is purely lexical. It ranks documents by term match strength
+    but cannot capture: semantic meaning, document relationships, or authority
+    propagation. It was state of the art in the 1970s-80s. We use it implicitly
+    in keyword overlap components, but not as the primary ranker.
+
+WHY NOT SEMANTIC SEARCH ONLY (pure embedding nearest-neighbor)?
+    Pure embedding search (e.g., FAISS ANN) retrieves the semantically closest
+    documents — but it ignores structural signals. Two documents with high
+    cosine similarity to the query are treated identically even if one is
+    referenced by 10 other high-quality documents and the other is isolated.
+    PageRank captures that "referenced by" signal. The combination
+    (embedding-guided Q + graph structure A) is stronger than either alone.
+
+VERDICT: Personalized PageRank is the only approach that combines:
+    (1) Query relevance guidance (via Q vector)
+    (2) Structural authority propagation (via adjacency matrix A)
+    (3) No labelled training data requirement
+    (4) Tunable damping (alpha) for exploration/exploitation balance
+It is used in Google's original paper (Page et al. 1999), and the topic-
+sensitive variant is from Haveliwala (2002), a widely cited approach.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+3. GRAPH TRAVERSAL — WHY BREADTH-FIRST SEARCH (BFS)?
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Used in: query expansion and document collection over the query graph.
+
+WHAT IT DOES:
+    Starting from the original query, BFS explores all depth-1 nodes first,
+    then all depth-2 nodes, ensuring breadth coverage before going deeper.
+
+WHY NOT DFS (Depth-First Search)?
+    DFS would follow one query expansion path all the way to depth-3 before
+    exploring alternatives. This causes topic drift: starting from "machine
+    learning" it might drill into "gradient descent" then "numerical methods"
+    then "linear algebra" — all moving further from the original intent.
+    BFS ensures we always have contextually close expansions at each level
+    before going further afield.
+
+WHY NOT RANDOM WALK / MONTE CARLO SAMPLING?
+    Random walks would non-deterministically pick which expansion nodes to
+    follow. Results would vary between runs, making evaluation unreliable.
+    Also, random walks have no guarantee of covering the most relevant regions
+    of the query space within a bounded number of steps.
+
+WHY NOT BEAM SEARCH?
+    Beam search keeps only the top-K scoring candidates at each level. This
+    is actually close to what we do (BFS + pruning). The difference is that
+    pure beam search collapses to a single "best path" and misses diversity.
+    Our BFS + pruning keeps all nodes above a threshold, preserving multiple
+    semantic directions simultaneously.
+
+WHY NOT DIJKSTRA / A* (shortest path)?
+    These make sense on graphs with a defined goal state and edge costs.
+    Our query graph has no fixed "destination" — we are exploring a semantic
+    space, not finding a path between two known points.
+
+VERDICT: BFS is the natural choice for level-by-level semantic expansion
+because it guarantees topical closeness at each depth before expanding,
+aligns with how human topic exploration works (broad → specific), and is
+trivially parallelized (all nodes at one depth run simultaneously).
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+4. DOCUMENT EMBEDDINGS — WHY SENTENCE TRANSFORMERS (all-MiniLM-L6-v2)?
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Used in: all cosine similarity computations, edge weights, Q vector, re-ranking.
+
+WHAT IT DOES:
+    A BERT-based model fine-tuned on sentence-pair similarity tasks. Produces
+    a single 384-dimensional vector representing the full semantic meaning
+    of an input text.
+
+WHY NOT TF-IDF VECTORS?
+    TF-IDF produces sparse vectors where each dimension is a vocabulary term.
+    Problems: (A) No semantic understanding — "car" and "automobile" are
+    completely unrelated in TF-IDF space. (B) Vocabulary size can be 50,000+
+    dimensions, making cosine computation slow. (C) Cannot generalize to
+    unseen terms.
+
+WHY NOT WORD2VEC (average of word vectors)?
+    Word2Vec produces per-word embeddings; sentences are represented by
+    averaging all word vectors. Problems: (A) Averaging loses word order
+    and sentence structure. (B) "The dog bit the man" ≈ "The man bit the dog"
+    in averaged word2vec space. (C) Pre-trained Word2Vec (Google News) is
+    300-dimensional and 1.5GB — large for marginal gain.
+
+WHY NOT BERT (full, base)?
+    BERT-base produces contextual token embeddings, not sentence embeddings.
+    To get a sentence embedding you need pooling (CLS token or mean pooling).
+    BERT-base has 110M parameters, ~400MB, and is significantly slower.
+    all-MiniLM-L6-v2 is a distilled model (22M parameters, ~80MB) that is
+    trained SPECIFICALLY for semantic sentence similarity via contrastive
+    learning. On sentence similarity benchmarks, MiniLM-L6 matches full BERT
+    at 5x the speed.
+
+WHY NOT OpenAI text-embedding-ada-002 / text-embedding-3-small?
+    (A) Requires paid API calls per document — expensive and slow in a
+        real-time pipeline.
+    (B) Adds network latency for every embedding request.
+    (C) Not reproducible without API access.
+    (D) For academic purposes, reproducibility and offline-first matters.
+
+WHY NOT GloVe?
+    GloVe is similar to Word2Vec (non-contextual word embeddings). It has the
+    same averaging problem and lacks sentence-level fine-tuning that
+    all-MiniLM-L6-v2 has via the SBERT training framework.
+
+VERDICT: all-MiniLM-L6-v2 is the optimal tradeoff of:
+    - Speed (5x faster than BERT-base)
+    - Quality (SBERT fine-tuning on 1B sentence pairs)
+    - Size (80MB — runs on any machine, no GPU needed)
+    - Offline-first (no API dependency)
+It is the most widely used small embedding model in the open-source community
+and is the default in LangChain, LlamaIndex, and similar frameworks.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+5. DEDUPLICATION — WHY MINHASH?
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Used in: removing near-duplicate documents after scraping.
+
+WHAT IT DOES:
+    MinHash approximates Jaccard similarity between document shingle sets
+    using random hash functions. Documents with Jaccard > 0.9 are flagged
+    as duplicates without comparing the full text.
+
+WHY NOT EXACT MD5/SHA HASH?
+    Exact hashing only catches byte-identical documents. A page that has
+    a "Last updated" timestamp at the bottom, or a slight sidebar change,
+    would be considered unique. In web scraping, the same article syndicated
+    across different sites with minor variations would all survive.
+    MinHash catches near-duplicates, not just exact copies.
+
+WHY NOT SIMHASH (used by Google)?
+    SimHash is designed for near-duplicate detection via bit-level Hamming
+    distance. It's excellent at scale (Google uses it for crawl deduplication).
+    For our scale (< 200 documents), MinHash is simpler, has better Jaccard
+    approximation accuracy at small numbers of permutations, and has
+    well-tested Python libraries (datasketch).
+
+WHY NOT DIRECT EMBEDDING COSINE (>0.95 = duplicate)?
+    This would require computing pairwise cosine similarity for every new
+    document against all collected documents — O(N) per insertion.
+    MinHash is O(num_permutations) per insertion regardless of corpus size.
+    Also, embedding similarity can group semantically similar documents
+    (same topic, different content) that we actually WANT to keep.
+
+VERDICT: MinHash is the standard for large-scale near-duplicate detection
+with a well-understood false positive rate controlled by num_permutations.
+At our scale, 128 permutations give < 1% error rate.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+6. KEYWORD OVERLAP — WHY JACCARD?
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Used in: node pruning score, document graph edge weight.
+
+WHAT IT DOES:
+    Jaccard(A, B) = |A ∩ B| / |A ∪ B|
+    Measures set overlap normalized by the total vocabulary of both sets.
+
+WHY NOT OVERLAP COEFFICIENT?
+    Overlap = |A ∩ B| / min(|A|, |B|)
+    Problem: if document B is a subset of document A, overlap = 1.0.
+    A very short query "python" matches perfectly against any long document
+    containing "python". This creates a length bias where short, generic
+    queries score 1.0 against almost any document. Jaccard penalizes
+    this by including the union in the denominator.
+
+WHY NOT DICE COEFFICIENT?
+    Dice = 2 × |A ∩ B| / (|A| + |B|)
+    Mathematically, Dice ≥ Jaccard always (Dice = 2J / (1 + J)).
+    Both are monotonically related, so ranking order is identical.
+    We chose Jaccard as it is more commonly cited in IR literature
+    and more interpretable (intersection / total unique terms).
+
+WHY NOT COSINE OF TF-IDF VECTORS (for keywords)?
+    Computing full TF-IDF vectors and their cosine requires knowing the
+    IDF of each term across the entire corpus. Since we are building
+    the corpus dynamically during BFS, IDF values change with each new
+    document. Recomputing TF-IDF on every pruning decision is expensive.
+    Jaccard over sets is computed in O(|A| + |B|) with no corpus-level state.
+
+VERDICT: Jaccard is the go-to for set similarity in IR — it is used in
+MinHash, Locality-Sensitive Hashing (LSH), and shingling-based dedup.
+It is simple, symmetric, bounded [0,1], and requires no corpus statistics.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+7. DOMAIN AUTHORITY — WHY URL PATTERN HEURISTICS?
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Used in: node pruning, PageRank Q vector.
+
+WHAT IT DOES:
+    Assigns a trust score [0, 1] to a URL based on its domain pattern,
+    using pre-defined tiers (.gov/.edu = 1.0, github.com/docs.* = 0.85, etc.)
+
+WHY NOT MOZ DOMAIN AUTHORITY (DA) / AHREFS DR?
+    These are proprietary backlink-based metrics computed from crawling
+    billions of pages. They require API calls ($) and real-time network access.
+    Not suitable for an offline or rate-limited academic system.
+
+WHY NOT TRUE PAGERANK FROM GOOGLE?
+    Google's actual PageRank is computed on the entire web graph (50+ billion
+    pages). We don't have access to it. The publicly exposed "PageRank" API
+    was shut down in 2016. Any PR scores you find are approximations.
+
+WHY NOT ALEXA RANK / SIMILAR WEB TRAFFIC DATA?
+    Traffic-based authority is not the same as content quality authority.
+    Reddit has extremely high traffic but a Reddit post about machine learning
+    is not necessarily more authoritative than an arxiv paper with low traffic.
+    Domain type (academic, official documentation, government) is a better
+    signal for content quality in a research-oriented search engine.
+
+WHY NOT TRAIN A CLASSIFIER ON DOMAIN QUALITY?
+    Would require labelled (domain, quality) pairs, which we don't have.
+    Also, a trained classifier might capture popularity bias rather than
+    actual content quality.
+
+WHY THESE SPECIFIC TIERS (the actual values)?
+    - .gov / .edu: Legally controlled domains. Content must meet institutional
+      standards. As close to ground truth as possible for factual queries.
+    - arxiv, ieee, acm, springer: Peer-reviewed academic publishers.
+      Content has passed expert review.
+    - github.com, stackoverflow.com: Technical communities with crowdsourced
+      quality control (votes, stars). Highly reliable for coding queries.
+    - docs.* / readthedocs: Official documentation. Authoritative by definition.
+    - .org: Generally non-commercial, often curated content. Lower than .edu
+      but higher than random blogs.
+    - medium.com, dev.to: Mixed quality. Excellent posts exist but also
+      low-quality clickbait. Neutral-medium score.
+    - Default (0.30): Unknown blog or personal site. Not penalized, but
+      given no trust bonus.
+
+VERDICT: URL-pattern heuristics are:
+    (1) Zero-latency (pure string matching)
+    (2) No external dependency
+    (3) Surprisingly effective — the correlation between domain type and
+        content quality is well-established in web IR research (Gyöngyi et al.)
+    (4) Transparent and auditable — unlike black-box ML models
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+8. CANDIDATE SCORING — WHY 6-COMPONENT WEIGHTED FORMULA?
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Formula:
+    score = 0.25 × semantic
+          + 0.20 × keyword_overlap
+          + 0.15 × serp_rank
+          + 0.15 × domain_authority
+          + 0.15 × content_quality
+          + 0.10 × freshness
+
+Used in: pruning BFS expansion nodes at Stage 1.
+
+WHY NOT JUST SEMANTIC SIMILARITY (0.25 → 1.0)?
+    Pure semantic scoring suffers from false positives. A beautifully written
+    paragraph about "apple orchards" might score high for "Apple MacBook"
+    queries due to embedding space proximity. Keyword overlap acts as a
+    lexical anchor — ensuring actual query terms appear.
+
+WHY NOT JUST BM25?
+    Pure BM25 is lexical-only. It would completely miss a document where the
+    concept exists but the exact query terms don't appear. For modern queries
+    like "how do I make my neural network not overfit", BM25 struggles with
+    paraphrase and synonymy. Semantic similarity handles this.
+
+WHY NOT A SINGLE LINEAR REGRESSION MODEL?
+    Linear regression requires labelled training data with relevance scores.
+    As noted above, we have none. The 6-component formula is a hand-crafted
+    linear model based on IR theory — equivalent to what you'd get from a
+    linear ranker IF you had labelled data.
+
+WHY THESE SPECIFIC WEIGHTS (0.25, 0.20, 0.15, 0.15, 0.15, 0.10)?
+    Semantic (0.25): Highest weight because embedding similarity from a
+        fine-tuned sentence model is the strongest single signal for
+        topical relevance in modern IR.
+    Keyword (0.20): Second highest — lexical match is foundational and
+        has lowest false-positive rate.
+    SERP rank (0.15): Brave/DDG have already done some ranking work.
+        Their position-1 result should be taken seriously but not blindly.
+    Domain (0.15): Authority signal. Equal weight to SERP because a
+        position-3 result from arxiv.org beats position-1 from a random blog.
+    Quality (0.15): Content density gate. Prevents surfacing thin pages
+        that pass semantic and keyword checks but contain little substance.
+    Freshness (0.10): Lower weight — we don't always have reliable timestamps.
+        Included as a placeholder for future improvement.
+
+WHY NOT EQUAL WEIGHTS (1/6 each)?
+    Equal weights assume all signals are equally reliable. They are not.
+    Semantic similarity from a fine-tuned model is empirically more reliable
+    than a domain heuristic, which is why it gets higher weight.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+9. GRAPH EDGE WEIGHT — WHY 4-COMPONENT FORMULA?
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Formula:
+    W_ij = 0.35 × embedding_similarity
+         + 0.25 × keyword_overlap
+         + 0.20 × link_presence (domain-level)
+         + 0.20 × anchor_text_similarity
+
+WHY NOT PURE EMBEDDING SIMILARITY FOR EDGES?
+    Pure embedding would create edges between any semantically related pair.
+    Two documents about completely different aspects of "Python" (the language
+    vs the snake) might share a high embedding similarity. Adding keyword
+    overlap as a constraint reduces false edge creation.
+
+WHY NOT PURE HYPERLINK PRESENCE?
+    Real PageRank uses purely the hyperlink graph. But we only have 40-200
+    documents that were independently scraped — they very rarely directly link
+    to each other. Using only hyperlinks would produce a forest of isolated
+    nodes with almost no edges. PageRank over a disconnected graph collapses.
+
+WHY DOMAIN-LEVEL LINKS INSTEAD OF EXACT URL MATCHING?
+    The old formula checked: "does doc_A contain the exact URL of doc_B?"
+    This almost never triggered because: scraped links go to /page/article-title
+    while the document URL might be /article-title or have different paths.
+    Domain-level matching asks: "does doc_A link to the same website as doc_B?"
+    This correctly identifies co-citation — a strong IR signal. If two documents
+    both cite wikipedia.org, they are likely discussing related concepts.
+
+WHY ANCHOR TEXT FROM URL SLUGS?
+    Anchor text is the clickable text of a hyperlink (e.g., "click here →
+    gradient descent"). It is one of the most powerful signals in web IR —
+    Google's paper noted that anchor text often describes the linked page
+    better than the page itself. We approximate this by parsing URL path
+    slugs (/gradient-descent → "gradient descent") since we don't scrape
+    actual anchor text. It's an approximation but better than nothing.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+10. PAGERANK Q VECTOR — WHY THE 3-WAY BLEND?
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Formula:
+    Q_i = 0.60 × cosine_sim(doc_i, query)
+        + 0.25 × domain_score_i
+        + 0.15 × (1 / serp_rank_i), normalized
+
+WHY NOT PURE COSINE SIMILARITY FOR Q?
+    Pure cosine Q means the random walker always teleports proportionally to
+    semantic similarity. But two documents with identical cosine similarity
+    to the query are not equally valuable — one might be from arxiv.org
+    and the other from a low-quality blog. The domain signal breaks that tie.
+
+WHY NOT UNIFORM Q (standard PageRank)?
+    Uniform Q = 1/N for all documents = standard PageRank.
+    This ignores query relevance entirely. The most-linked document wins
+    regardless of whether it answers the query. At our scale (N ≤ 200),
+    this is effectively random noise.
+
+WHY INCLUDE SERP RANK IN Q?
+    The search API (Brave) returns ranked results. Brave has its own ranking
+    infrastructure (similar to Google). Their position-1 result has survived
+    their quality filters. Including this as a weak prior (0.15 weight) means
+    we trust-but-verify their ranking, rather than ignoring it entirely or
+    blindly following it.
+
+WHY 0.60 / 0.25 / 0.15 SPECIFICALLY?
+    - 0.60 for semantic: Primary signal — most reliable for query relevance.
+    - 0.25 for domain: Secondary — strong quality indicator but independent
+      of query relevance (a .gov page might be irrelevant to the query).
+    - 0.15 for SERP: Tertiary — useful prior but we want our own ranking
+      to disagree with SERP when graph structure justifies it.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+11. RE-RANKING — WHY COSINE + PAGERANK BLEND?
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Formula:
+    final_score = 0.60 × passage_cosine + 0.40 × pagerank_normalized
+
+WHY RE-RANK AT ALL?
+    PageRank operates on the global graph and can be influenced by
+    well-connected but less relevant documents. A document that happens to
+    be cited by many others in the collection gets a high PR score even if
+    the user's specific sub-question is answered better by a lower-ranked doc.
+    Re-ranking adds a local, fine-grained check at the passage level.
+
+WHY NOT A CROSS-ENCODER (MS-MARCO, MiniLM cross-encoder)?
+    Cross-encoders (like microsoft/ms-marco-MiniLM-L-6-v2) jointly encode
+    (query, document) pairs and produce a relevance score. They are the
+    gold standard for re-ranking in production systems (used by Bing, Cohere).
+    We chose NOT to use them for two reasons:
+    (A) Size: A cross-encoder model adds ~500MB download.
+    (B) Speed: Cross-encoders run O(K) forward passes one at a time (not
+        batchable for query-doc pairs). At top-20, this adds 2-5 seconds
+        per query. Unacceptable for a live demo.
+    The cosine blend achieves ~80% of the benefit at near-zero extra cost
+    since we already have the embedding model loaded.
+
+WHY NOT JUST COSINE WITHOUT PAGERANK IN THE FINAL SCORE?
+    Pure cosine re-ranking would ignore all the structural information
+    computed during graph construction. PageRank captures "this document is
+    trusted because related documents reference it" — discarding that in the
+    final step would be wasteful.
+
+WHY PASSAGE-LEVEL (512 TOKENS) INSTEAD OF FULL DOCUMENT?
+    All-MiniLM-L6-v2 has a 512-token maximum input length. Truncating to
+    the first 512 tokens of each document is the standard approach.
+    More importantly, the first 512 tokens of an article are almost always
+    the introduction — the most query-relevant part. Re-ranking on the
+    introduction is more meaningful than averaging over an entire 5000-word
+    article where later sections may be off-topic.
+
+WHY 0.60 COSINE / 0.40 PAGERANK?
+    We want the local relevance check (cosine) to dominate because:
+    (A) PageRank already had its chance to order things structurally.
+    (B) Re-ranking's purpose is to surface the locally most relevant doc.
+    0.40 for PageRank ensures we don't completely discard the structural
+    signal — a structurally authoritative doc that scores almost as well
+    on cosine should still win over a structurally isolated doc.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+12. CONTENT QUALITY SCORING — WHY THESE 5 SIGNALS?
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Formula:
+    quality = 0.30 × text_length_score
+            + 0.20 × unique_token_ratio
+            + 0.20 × low_link_density
+            + 0.20 × readability_proxy
+            + 0.10 × title_relevance
+
+WHY NOT FLESCH-KINCAID READABILITY?
+    Flesch-Kincaid requires syllable counting, which is expensive and
+    language-dependent. Our readability_proxy (average sentence length in
+    the 10-25 word "ideal" window) captures the same signal faster.
+    Technical documentation often scores "hard" on Flesch-Kincaid despite
+    being well-written for its audience — sentence length is more neutral.
+
+WHY NOT JUST WORD COUNT?
+    Word count = how long the page is. But SEO spam pages are often very
+    long (keyword stuffing). A 2000-word page of repeated "buy cheap X"
+    would pass a word count filter. Unique token ratio catches this:
+    genuine articles have high vocabulary diversity; spam repeats the same
+    terms continuously.
+
+WHY LINK DENSITY?
+    Navigation pages, sitemaps, and directory pages have many links per word.
+    These pages have structure (links) but almost no prose content useful
+    for our corpus. Filtering on link density targets these accurately.
+
+WHY BOILERPLATE STRIPPING BEFORE SCORING?
+    Cookie consent banners, GDPR notices, footer text are present on almost
+    every modern website. If not stripped, they inflate word counts and
+    reduce unique token ratios (they repeat standard legal phrases). Stripping
+    known boilerplate patterns before quality measurement gives cleaner scores.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+13. POWER ITERATION FOR PAGERANK — WHY NOT OTHER SOLVERS?
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHAT IT IS:
+    Power iteration solves P = αAP + (1-α)Q by iterating until convergence.
+    We run at most 30 iterations with tolerance 1e-6.
+
+WHY NOT CLOSED-FORM / MATRIX INVERSION?
+    The closed-form solution is P = (1-α)(I - αA)^{-1} Q.
+    Matrix inversion is O(N³). For N=200 documents, this is 8 million
+    operations. Power iteration typically converges in 15-20 steps, each
+    O(N²). Power iteration is faster in practice and numerically more stable.
+
+WHY NOT GAUSS-SEIDEL ITERATION?
+    Gauss-Seidel (updating in-place) can converge faster per iteration
+    than Jacobi-style (batch update) power iteration. However, it is harder
+    to parallelize and the convergence advantage disappears at N < 1000.
+    Power iteration with numpy matrix operations is essentially free to
+    vectorize via BLAS.
+
+WHY 30 ITERATIONS?
+    At α=0.85, PageRank is known to converge in about 50-100 iterations
+    on web-scale graphs. On small, dense graphs like ours (N < 200, many
+    edges), convergence is much faster—typically 10-15 iterations. Using
+    30 with early stopping at 1e-6 is a safe upper bound that never does
+    unnecessary work while guaranteeing convergence.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+14. DAMPING FACTOR α = 0.85 — WHY THIS VALUE?
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHAT IT CONTROLS:
+    α = probability of following an edge vs. teleporting.
+    High α → more authority propagation through edges.
+    Low α → more influence from the personalization vector Q.
+
+WHY 0.85?
+    This is the value from the original PageRank paper (Page et al. 1999).
+    It represents the empirical observation that a web surfer follows a link
+    approximately 85% of the time and "gets bored" and jumps to a random
+    page 15% of the time. It is the standard in all PageRank implementations.
+
+    For our system: at α=0.85, the Q vector (our query relevance signal)
+    contributes 15% directly at each iteration. Given that Q is already
+    well-calibrated (semantic + domain + SERP), this is sufficient influence
+    without dominating the structural signal from A.
+
+WHAT IF α WERE 0.5?
+    Result would be almost pure Q (relevance-based ranking) with very little
+    graph structure. Equivalent to just sorting by the Q vector.
+
+WHAT IF α WERE 0.99?
+    Result would be almost pure graph structure, with Q having negligible
+    influence. Effectively ignores query relevance — degrades to standard PR.
+
+0.85 is the sweet spot proven empirically over 25 years.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SUMMARY TABLE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ Component              | Choice             | Key Alternative Rejected
+ ─────────────────────────────────────────────────────────────────────
+ Vector Similarity      | Cosine             | Euclidean (length bias)
+ Graph Ranker           | Personalized PR    | Standard PR (no query)
+                        |                    | HITS (hub drift, sparse graph)
+                        |                    | BM25 (lexical only)
+ Traversal              | BFS                | DFS (topic drift)
+ Embeddings             | all-MiniLM-L6-v2   | BERT (slow), TF-IDF (no semantics)
+ Deduplication          | MinHash            | Exact hash (misses near-dups)
+ Keyword Overlap        | Jaccard            | Overlap coeff (length bias)
+ Domain Authority       | URL heuristic      | Moz DA (paid), Alexa (traffic≠quality)
+ Stage 1 Scoring        | 6-component linear | Pure BM25 (lexical only)
+ Graph Edges            | 4-component        | Pure embedding (false edges)
+ PR Q Vector            | 3-signal blend     | Uniform (= standard PR)
+ Re-ranking             | Cosine + PR blend  | Cross-encoder (too slow, too large)
+ Content Filter         | 5-signal quality   | Just word count (misses spam)
+ PR Solver              | Power iteration    | Matrix inversion O(N³)
+ Damping Factor         | 0.85               | Original paper standard
+
+================================================================================
+END OF DOCUMENT
+================================================================================

@@ -8,9 +8,26 @@ from typing import List, Set
 
 
 def clean_text(text: str) -> str:
-    """Lowercase, strip punctuation, and collapse whitespace."""
+    """Lowercase, strip punctuation (preserving tech terms like c++, c#, .net), and collapse whitespace."""
     text = text.lower()
+    # Preserve common programming symbols: +, #, . (in context like c++, c#, .net)
+    # First protect known tech terms
+    _TECH_TERMS = {
+        "c++": "CPLUS_CPLUS",
+        "c#": "CSHARP_LANG",
+        ".net": "DOTNET_LANG",
+        "node.js": "NODEJS_LANG",
+        "react.js": "REACTJS_LANG",
+        "vue.js": "VUEJS_LANG",
+        "next.js": "NEXTJS_LANG",
+    }
+    for term, placeholder in _TECH_TERMS.items():
+        text = text.replace(term, placeholder)
+    # Strip remaining punctuation
     text = re.sub(r"[^\w\s]", "", text)
+    # Restore tech terms
+    for term, placeholder in _TECH_TERMS.items():
+        text = text.replace(placeholder, term)
     text = re.sub(r"\s+", " ", text)
     return text.strip()
 

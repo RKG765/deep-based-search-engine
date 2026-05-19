@@ -1,7 +1,7 @@
 """
 search_client.py — Unified search interface.
 Primary:  Brave Search API
-Fallback: DuckDuckGo (via duckduckgo-search library)
+Fallback: DuckDuckGo (via ddgs library)
 
 Returns a flat list of SearchResult dataclasses for each query.
 """
@@ -10,7 +10,7 @@ import logging
 from typing import List
 
 import httpx
-from duckduckgo_search import DDGS
+from ddgs import DDGS
 
 from app.config import settings
 from models.document import SearchResult
@@ -57,11 +57,12 @@ async def _search_brave(query: str, max_results: int) -> List[SearchResult]:
 
 def _search_ddg(query: str, max_results: int) -> List[SearchResult]:
     """
-    Fallback: use DuckDuckGo text search.
+    Fallback: use DuckDuckGo text search via the `ddgs` package.
     This is synchronous but wrapped in the caller.
     """
     results: List[SearchResult] = []
-    with DDGS() as ddgs:
+    try:
+        ddgs = DDGS()
         for idx, r in enumerate(ddgs.text(query, max_results=max_results), start=1):
             results.append(
                 SearchResult(
@@ -71,6 +72,8 @@ def _search_ddg(query: str, max_results: int) -> List[SearchResult]:
                     rank=idx,
                 )
             )
+    except Exception as exc:
+        logger.warning("DDG search error: %s", exc)
     return results[:max_results]
 
 

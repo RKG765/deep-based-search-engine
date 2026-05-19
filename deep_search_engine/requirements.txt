@@ -31,4 +31,4 @@ sumy>=0.11.0
 numpy>=1.25.2
 
 # Search
-duckduckgo-search>=4.1.1
+ddgs>=6.0.0

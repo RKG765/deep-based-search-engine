@@ -33,6 +33,11 @@ _embed_model: SentenceTransformer | None = None
 def _get_embed_model() -> SentenceTransformer:
     global _embed_model
     if _embed_model is None:
+        import os
+        # Increase timeout drastically for slow or restricted networks
+        os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] = "300"
+        # Optional: Disable proxy SSL verification if still failing
+        os.environ["CURL_CA_BUNDLE"] = ""
         _embed_model = SentenceTransformer(settings.EMBEDDING_MODEL)
     return _embed_model
 

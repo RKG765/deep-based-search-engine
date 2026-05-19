@@ -27,6 +27,10 @@ class CleanDocument:
     headings: List[str] = field(default_factory=list)
     outbound_links: List[str] = field(default_factory=list)
     word_count: int = 0
+    # ── Ranking signals (plumbed from pipeline) ──────────────────────
+    serp_rank: int = 0          # 1-indexed SERP position (0 = unknown)
+    quality_score: float = 0.0  # composite content quality [0, 1]
+    domain_score: float = 0.0   # domain authority heuristic [0, 1]
 
 
 @dataclass
@@ -43,5 +47,19 @@ class RankedDocument:
     """A document with its PageRank score (graph_ranker.py output)."""
     index: int
     score: float
+    url: str
+    title: str
+
+
+@dataclass
+class RerankResult:
+    """A document after the final re-ranking stage."""
+    index: int
+    final_score: float          # raw blended score: 0.60×cosine + 0.40×pr_norm
+    confidence_pct: float       # min-max normalized relative confidence [0–100]
+    pagerank_score: float       # raw PageRank score (sums to 1 across corpus)
+    cosine_score: float         # passage-level cosine similarity [0–1]
+    domain_score: float         # domain authority heuristic [0–1]
+    quality_score: float        # composite content quality [0–1]
     url: str
     title: str

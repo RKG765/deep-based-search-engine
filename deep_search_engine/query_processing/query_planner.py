@@ -23,32 +23,52 @@ def expand_query(original_query: str) -> List[str]:
 
     Strategy:
         1. Extract all keywords (noun phrases + NER + YAKE).
-        2. Recombine them into meaningful search phrases.
-        3. Cap output at MAX_NEW_NODES (default: 3) to prevent tree explosion.
+        2. Prefer multi-word phrases as expansions (they carry more context).
+        3. Combine single keywords into meaningful pairs.
+        4. Cap output at MAX_NEW_NODES (default: 3) to prevent tree explosion.
 
     Example:
-        Input:  "deploy nodejs aws securely"
-        Output: ["nodejs aws deployment",
-                 "nodejs ec2 deploy",
-                 "nodejs security configuration"]
+        Input:  "what is capital of india"
+        Output: ["capital india", "capital of india"]
     """
     keywords = extract_all(original_query)
     normalized_original = clean_text(original_query)
 
-    # Filter out the exact original query
-    expansions = [kw for kw in keywords if clean_text(kw) != normalized_original]
+    # Separate multi-word phrases from single keywords
+    multi_word = [kw for kw in keywords if len(kw.split()) >= 2]
+    single_word = [kw for kw in keywords if len(kw.split()) == 1]
 
-    # If we got fewer expansions than desired, supplement with pairs of keywords
-    if len(expansions) < settings.MAX_NEW_NODES and len(keywords) >= 2:
-        for i in range(len(keywords)):
-            for j in range(i + 1, len(keywords)):
-                pair = f"{keywords[i]} {keywords[j]}"
+    expansions: List[str] = []
+
+    # Priority 1: multi-word phrases (they carry the most context)
+    for phrase in multi_word:
+        if clean_text(phrase) != normalized_original and phrase not in expansions:
+            expansions.append(phrase)
+            if len(expansions) >= settings.MAX_NEW_NODES:
+                break
+
+    # Priority 2: combine single keywords into pairs for richer context
+    if len(expansions) < settings.MAX_NEW_NODES and len(single_word) >= 2:
+        for i in range(len(single_word)):
+            for j in range(i + 1, len(single_word)):
+                pair = f"{single_word[i]} {single_word[j]}"
                 if clean_text(pair) != normalized_original and pair not in expansions:
                     expansions.append(pair)
                     if len(expansions) >= settings.MAX_NEW_NODES:
                         break
             if len(expansions) >= settings.MAX_NEW_NODES:
                 break
+
+    # Priority 3: only use single keywords as a last resort (avoid isolated words)
+    if len(expansions) < settings.MAX_NEW_NODES:
+        for kw in single_word:
+            if kw not in expansions and clean_text(kw) != normalized_original:
+                # Wrap single keyword with original query context
+                contextual = f"{kw} {single_word[0]}" if kw != single_word[0] and len(single_word) > 1 else kw
+                if contextual not in expansions:
+                    expansions.append(contextual)
+                    if len(expansions) >= settings.MAX_NEW_NODES:
+                        break
 
     result = expansions[: settings.MAX_NEW_NODES]
     logger.info("Query expansion: '%s' → %s", original_query, result)

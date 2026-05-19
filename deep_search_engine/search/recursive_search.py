@@ -25,8 +25,9 @@ from models.query import Query
 from query_processing.query_graph import QueryGraph
 from query_processing.query_parser import tokenize
 from query_processing.keyword_extractor import extract_all
+from query_processing.query_understanding import reformulate_query, INTENT_FACTUAL
 from search.search_client import search
-from search.node_pruning import prune_nodes
+from search.node_pruning import prune_nodes, domain_authority
 from scraping.scraper import fetch_and_extract
 from scraping.content_cleaner import clean_scraped_page
 from scraping.deduplicator import Deduplicator
@@ -64,6 +65,7 @@ class RecursiveSearchEngine:
         self.collected_docs: List[CleanDocument] = []
         self.seen_urls: Set[str] = set()
         self.deduplicator = Deduplicator()
+        self.query_intent: str = ""
 
     async def run(self, query: Query) -> List[CleanDocument]:
         """
@@ -71,13 +73,26 @@ class RecursiveSearchEngine:
         Runs full BFS pipeline and returns deduplicated documents.
         """
         max_depth = min(query.depth, settings.MAX_DEPTH)
+
+        # ── Step 0: Understand intent & reformulate ──────────────────
+        reformulated, intent = reformulate_query(query.raw)
+        self.query_intent = intent
         logger.info(
-            "Starting recursive search for '%s' (max_depth=%d, pruning=%s)",
-            query.raw, max_depth, query.pruning,
+            "Query understanding: intent='%s', reformulated='%s'",
+            intent, reformulated,
         )
 
-        # Build query graph (Depth 0 + Depth 1 seeds)
-        self.query_graph.build_from_query(query.raw)
+        # For factual queries, use the reformulated version as the primary search query
+        # This preserves "capital of india" instead of splitting into "capital" + "india"
+        search_query = reformulated if intent == INTENT_FACTUAL else query.raw
+
+        logger.info(
+            "Starting recursive search for '%s' (search_query='%s', max_depth=%d, pruning=%s)",
+            query.raw, search_query, max_depth, query.pruning,
+        )
+
+        # Build query graph (Depth 0 + Depth 1 seeds) using the search query
+        self.query_graph.build_from_query(search_query)
 
         # Compute query embedding for pruning
         query_embedding = _embed([query.raw])[0]
@@ -124,6 +139,10 @@ class RecursiveSearchEngine:
                     doc = clean_scraped_page(page)
                     if doc is None:
                         continue
+
+                    # ── Plumb ranking signals ──────────────────────
+                    doc.serp_rank   = sr.rank                  # SERP position
+                    doc.domain_score = domain_authority(sr.url) # authority heuristic
 
                     # MinHash deduplication (via dedicated Deduplicator)
                     if self.deduplicator.is_duplicate(doc):
